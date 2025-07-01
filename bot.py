@@ -146,5 +146,5 @@ def main():
     app.run_polling()
 
 # 🚨 Yeh galat tha: if name == 'main'
-if name == 'main':
+if __name__ == '__main__':
     main()
