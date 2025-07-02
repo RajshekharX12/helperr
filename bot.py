@@ -1,7 +1,13 @@
+import logging
+import time
+import os  # ✅ Yeh line zaruri hai
 import subprocess
+import json
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (ApplicationBuilder, CommandHandler, ContextTypes,
-                          CallbackQueryHandler)
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+)
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from threading import Thread
