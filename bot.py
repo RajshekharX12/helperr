@@ -84,6 +84,8 @@ async def set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_numbers(numbers)
     await update.message.reply_text(f"✅ Saved {len(numbers)} numbers.")
 
+
+        await update.callback_query.message.reply_text(result_text)
 # /chk
 async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     numbers = load_numbers()
@@ -97,17 +99,16 @@ async def chk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not numbers:
         return
 
-    results = check_fragment_batch(numbers)
+    results = await check_fragment_batch(numbers)
 
     result_text = "📋 Fragment Check Result:\n\n"
-    for number, status in sorted(results, key=lambda x: x[0]):
+    for number, status in results:
         result_text += f"{number}: {status}\n"
 
     if update.message:
         await update.message.reply_text(result_text)
     elif update.callback_query:
         await update.callback_query.message.reply_text(result_text)
-
 # /clear
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_numbers()
