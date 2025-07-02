@@ -58,7 +58,7 @@ def check_fragment_batch_selenium(numbers):
                 driver.get(f"https://fragment.com/number/{num}")
                 content = driver.page_source
                 if "This phone number is restricted on Telegram" in content:
-                    results.append((num, "🔒 Restricted"))
+                    results.append((num, "🔒"))
                 elif "This number is not available" in content or 'class="NotFound"' in content:
                     results.append((num, "🔒 Not Found"))
                 else:
