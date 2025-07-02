@@ -62,19 +62,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "👋 Welcome to Fragment +888 Checker Bot!
-
-Use the buttons below or commands:
-"
-        "/setnumbers 888xxxx,888yyyy
-/removenum 888xxx
-/checknum
-/check1 888xxx
-/notifyon
-/notifyoff",
-        reply_markup=reply_markup
+    "👋 Welcome to Fragment +888 Checker Bot!\n\n"
+    "Use the buttons below or commands:\n"
+    "/setnumbers 888xxxx,888yyyy\n"
+    "/removenum 888xxx\n"
+    "/checknum\n"
+    "/check1 888xxx\n"
+    "/notifyon\n"
+    "/notifyoff"
     )
-
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
