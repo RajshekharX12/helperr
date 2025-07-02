@@ -33,27 +33,31 @@ def clear_numbers():
     if os.path.exists(DATA_FILE):
         os.remove(DATA_FILE)
 
-def check_fragment_batch(numbers):
+async def check_fragment_batch(numbers):
     results = []
-    async def run():
+    try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch()
+            browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
+
             for num in numbers:
                 try:
                     await page.goto(f"https://fragment.com/number/{num}")
+                    await page.wait_for_timeout(1000)
                     content = await page.content()
-                    if "This number is already taken" in content:
+                    if "This number is not available" in content:
                         results.append((num, "Restricted"))
                     else:
                         results.append((num, "Free"))
-                except Exception as e:
+                except Exception:
                     results.append((num, "Error"))
-            await browser.close()
-        return results
 
-    import asyncio
-    return asyncio.run(run())
+            await browser.close()
+    except Exception:
+        for num in numbers:
+            results.append((num, "Error"))
+
+    return results
 
 # /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
