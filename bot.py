@@ -13,9 +13,10 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from threading import Thread
 from dotenv import load_dotenv
-Load .env
+import os
 
-load_dotenv() TOKEN = os.getenv("BOT_TOKEN")
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
 
 Logging setup
 
