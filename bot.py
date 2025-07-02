@@ -1,6 +1,8 @@
 
 import logging
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import pandas as pd
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
