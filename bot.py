@@ -18,7 +18,7 @@ import os
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 
-Logging setup
+#Logging setup
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
