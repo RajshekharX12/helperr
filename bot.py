@@ -206,7 +206,7 @@ async def accept_rules_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     name = query.from_user.first_name
     await query.answer(f"{name} accepted the rules.")
     await query.edit_message_reply_markup(
-        InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ Accepted by: {name}", callback_data="none")]])
+        InlineKeyboardMarkup([[InlineKeyboardButton(f"Rules Accepted by: {name}", callback_data="none")]])
     )
 
 
