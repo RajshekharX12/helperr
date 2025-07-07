@@ -1,4 +1,3 @@
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
 from uuid import uuid4
 import re
