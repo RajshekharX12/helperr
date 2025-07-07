@@ -23,8 +23,8 @@ from telegram.ext import (
 from playwright.sync_api import sync_playwright
 from uuid import uuid4
 
-# 🧩 Import rules inline logic
-from rules_handler import inline_query_handler, button_handler, get_rules_keyboard, handle_rules_button
+# 🧩 Import rules inline logic (NO button_handler import)
+from rules_handler import inline_query_handler, get_rules_keyboard, handle_rules_button
 
 # Load environment variables
 load_dotenv()
@@ -122,10 +122,8 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def format_numbers_result(results):
     lines = []
-    i = 1
-    for num, status in results:
+    for i, (num, status) in enumerate(results, 1):
         lines.append(f"{i}. {num} {status}")
-        i += 1
     return "\n".join(lines)
 
 def filter_restricted(results):
@@ -138,7 +136,7 @@ async def checknum_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(delete_later(context, update.message.chat_id, sent.message_id))
         return
 
-    await update.message.reply_text("Checking numbers, please wait...")
+    wait_msg = await update.message.reply_text("Checking numbers, please wait...")
 
     results = check_fragment_batch_playwright(numbers)
     context.user_data["last_check_results"] = results
@@ -148,6 +146,8 @@ async def checknum_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Show Restricted Only", callback_data="show_restricted")]
     ]
     sent = await update.message.reply_text(res_txt, reply_markup=InlineKeyboardMarkup(keyboard))
+    # Don't delete the result message, but delete the "wait" message
+    asyncio.create_task(delete_later(context, update.message.chat_id, wait_msg.message_id, delay=0))
 
 async def check1_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -163,12 +163,14 @@ async def check1_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_check_results"] = results
     res_txt = format_numbers_result(results)
     sent = await update.message.reply_text(res_txt)
+    # Don't delete result
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
     if data == "chk":
+        # simulate as if user sent /checknum
         await checknum_command(query, context)
     elif data == "clear":
         await clear_command(query, context)
