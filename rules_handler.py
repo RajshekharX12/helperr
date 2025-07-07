@@ -1,5 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
 from uuid import uuid4
+import re
 
 LANGS = {
     "en": "English",
@@ -27,10 +28,52 @@ def get_rules_keyboard(lang, username=None):
         [InlineKeyboardButton(btn_text, callback_data=f"accept_rules_{lang}")]
     ])
 
+def normalize_fragment_number(query: str) -> str | None:
+    """
+    Accepts possible inputs like "04219463", "88804219463", "+88804219463", "7291 9999".
+    Returns normalized as "888xxxxxxxxx" (9 digits after 888).
+    Returns None if impossible to normalize.
+    """
+    # Remove all non-digit chars
+    digits = re.sub(r"\D", "", query)
+    # If starts with "888" and 12 digits: use as is
+    if digits.startswith("888") and len(digits) == 12:
+        return digits
+    # If starts with "+888" and 12/13 digits: remove plus, use
+    if digits.startswith("888") and len(digits) == 12:
+        return digits
+    # If 8 or 9 digits: treat as short number, prefix with 888
+    if len(digits) == 8 or len(digits) == 9:
+        return "888" + digits.zfill(9)
+    # If input like "7291 9999" (two numbers): join, prefix 888 if total 9 digits
+    if " " in query:
+        joined = "".join(re.findall(r"\d+", query))
+        if len(joined) == 8 or len(joined) == 9:
+            return "888" + joined.zfill(9)
+    # If two numbers in query (from spaces), sum them and try to fit
+    nums = list(map(int, re.findall(r"\d+", query)))
+    if len(nums) == 2:
+        combined = str(nums[0]) + str(nums[1])
+        if len(combined) == 8 or len(combined) == 9:
+            return "888" + combined.zfill(9)
+    # If 12 digits and startswith 888: return
+    if len(digits) == 12 and digits.startswith("888"):
+        return digits
+    # If 11 digits and startswith 88: pad
+    if len(digits) == 11 and digits.startswith("88"):
+        return "8" + digits
+    # Try to pad up to 12 digits
+    if len(digits) < 12:
+        pad = digits.rjust(12, "8")
+        return pad
+    return None
+
 async def inline_query_handler(update, context):
-    query = update.inline_query.query.strip().lower()
+    query = update.inline_query.query.strip()
     results = []
-    if query == "rules" or query == "@checker_888_bot rules":
+
+    # --- Rules language selection ---
+    if query.lower() == "rules" or query.lower() == "@checker_888_bot rules":
         buttons = [
             [InlineKeyboardButton("🇬🇧 English", switch_inline_query_current_chat="rules_en")],
             [InlineKeyboardButton("🇷🇺 Russian", switch_inline_query_current_chat="rules_ru")],
@@ -45,8 +88,9 @@ async def inline_query_handler(update, context):
                 reply_markup=InlineKeyboardMarkup(buttons),
             )
         )
-    elif query.startswith("rules_"):
-        lang = query.split("_")[1]
+    # --- Rules language text / accept ---
+    elif query.lower().startswith("rules_"):
+        lang = query.lower().split("_")[1]
         text = RULES_TEXTS.get(lang, "Unknown language")
         keyboard = get_rules_keyboard(lang)
         results.append(
@@ -57,6 +101,21 @@ async def inline_query_handler(update, context):
                 reply_markup=keyboard
             )
         )
+    else:
+        # Try to normalize as a fragment number
+        number = normalize_fragment_number(query)
+        if number and len(number) == 12 and number.startswith("888"):
+            url = f"https://fragment.com/number/{number}/code"
+            results.append(
+                InlineQueryResultArticle(
+                    id=str(uuid4()),
+                    title=f"Fragment: {number}",
+                    input_message_content=InputTextMessageContent(url),
+                    description=f"Link to fragment.com/number for {number}",
+                    url=url,
+                )
+            )
+
     await update.inline_query.answer(results)
 
 async def handle_rules_button(update, context):
@@ -64,4 +123,9 @@ async def handle_rules_button(update, context):
     user = query.from_user
     lang = query.data.split("_")[-1]
     keyboard = get_rules_keyboard(lang, username=user.username)
-    await query.message.edit_text(f"✅ Rules accepted by @{user.username}", reply_markup=keyboard)
+    text = f"✅ Rules accepted by @{user.username}"
+    if query.message is not None:
+        await query.message.edit_text(text, reply_markup=keyboard)
+    else:
+        await query.answer()
+        await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=keyboard)
