@@ -1,8 +1,8 @@
 import logging
 import os
 import asyncio
+import random
 from dotenv import load_dotenv
-from datetime import datetime
 
 from telegram import (
     Update,
@@ -17,22 +17,22 @@ from telegram.ext import (
     InlineQueryHandler,
 )
 
-from playwright.sync_api import sync_playwright
-from uuid import uuid4
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 
 from rules_handler import inline_query_handler, get_rules_keyboard, handle_rules_button
 
-# Load environment variables
+# --- Setup ---
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 DATA_FILE = "numbers.txt"
 MAX_NUMBERS = 1000
-# Telegram allows ~30 messages/sec per bot, but we use much much less for safety
-CHECK_DELAY_SEC = 0.7    # 0.7s between number checks = ~1.4 per sec
+CHECK_DELAY_SEC = 2.0  # 2–2.5s per number, safe for fragment.com
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- Helpers for storage ---
 def save_numbers(numbers):
     numbers = sorted(set(numbers))
     with open(DATA_FILE, "w") as f:
@@ -49,61 +49,78 @@ def clear_numbers():
     if os.path.exists(DATA_FILE):
         os.remove(DATA_FILE)
 
-def check_fragment_batch_playwright(numbers, limit=40):
-    """Check numbers using Playwright, with delays to avoid rate limits.
-    Limit default: 40 numbers per request (polite to Fragment and Telegram)"""
+def split_results(results, chars_limit=4000):
+    parts = []
+    chunk = []
+    total = 0
+    for line in results:
+        if total + len(line) + 1 > chars_limit and chunk:
+            parts.append('\n'.join(chunk))
+            chunk = []
+            total = 0
+        chunk.append(line)
+        total += len(line) + 1
+    if chunk:
+        parts.append('\n'.join(chunk))
+    return parts
+
+# --- Selenium checker ---
+def check_fragment_batch_selenium(numbers):
+    """Check all numbers, with retry and safe delay. Dumps HTML for single number 'Error'."""
     results = []
-    # Only check up to limit at once
-    to_check = numbers[:limit]
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            for num in to_check:
-                try:
-                    page.goto(f"https://fragment.com/number/{num}", timeout=10000)
-                    content = page.content()
-                    if "This phone number is restricted on Telegram" in content:
-                        results.append((num, "🔒 Restricted"))
-                    elif "This number is not available" in content or 'class="NotFound"' in content:
-                        results.append((num, "🔒 Not Found"))
-                    else:
-                        results.append((num, "✅ Free"))
-                except Exception:
+    options = Options()
+    options.headless = True
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    driver = webdriver.Chrome(options=options)
+    for num in numbers:
+        for attempt in range(3):  # Retry up to 3 times if error
+            try:
+                driver.get(f"https://fragment.com/number/{num}")
+                content = driver.page_source
+                if "This phone number is restricted on Telegram" in content:
+                    results.append((num, "🔒 Restricted"))
+                elif "This number is not available" in content or 'class="NotFound"' in content:
+                    results.append((num, "🔒 Not Found"))
+                else:
+                    results.append((num, "✅ Free"))
+                # Debug HTML dump if only one number and error
+                if len(numbers) == 1:
+                    with open("debug_fragment.html", "w", encoding="utf-8") as f:
+                        f.write(content)
+                break
+            except Exception as ex:
+                if attempt == 2:
                     results.append((num, "⚠️ Error"))
-                # Delay to avoid hammering either endpoint
-                import time
-                time.sleep(CHECK_DELAY_SEC)
-            browser.close()
-    except Exception:
-        for num in to_check:
-            results.append((num, "⚠️ Error"))
+                else:
+                    import time; time.sleep(CHECK_DELAY_SEC + random.uniform(0.3, 0.7))
+                    continue
+        # Always sleep a bit between requests for safety
+        import time; time.sleep(CHECK_DELAY_SEC + random.uniform(0.3, 0.7))
+    driver.quit()
     return results
 
-async def delete_later(context, chat_id, message_id, delay=5):
-    await asyncio.sleep(delay)
+# --- Async message deletion ---
+async def delete_message(message):
     try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        await message.delete()
     except Exception:
         pass
 
-async def send_and_auto_delete(ctx, txt, reply_markup=None, delay=5):
-    msg = await ctx.message.reply_text(txt, reply_markup=reply_markup)
-    asyncio.create_task(delete_later(ctx, ctx.message.chat_id, msg.message_id, delay=delay))
-
+# --- Bot commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("➕ Set", callback_data='set')],
         [InlineKeyboardButton("🔍 Check", callback_data='chk')],
         [InlineKeyboardButton("🧹 Clear", callback_data='clear')],
+        [InlineKeyboardButton("❌ Delete", callback_data='delete')],
         [InlineKeyboardButton("🎁", callback_data='gift')]
-        # No "Rules" button here!
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     msg = "🔥 Fragment +888 Checker Bot"
     try:
-        sent = await update.message.reply_text(msg, reply_markup=reply_markup)
-        asyncio.create_task(delete_later(context, update.message.chat_id, sent.message_id))
+        await update.message.reply_text(msg, reply_markup=reply_markup)
+        # Menu is never auto-deleted!
     except Exception as ex:
         logger.warning(f"start error: {ex}")
 
@@ -111,38 +128,42 @@ async def set_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         try:
             sent = await update.message.reply_text("Send /set 888xxxxxxx,888yyyyyyy")
-            asyncio.create_task(delete_later(context, update.message.chat_id, sent.message_id))
         except Exception:
-            pass
+            return
+        await delete_message(sent)
+        await delete_message(update.message)
         return
     numbers = [x.strip() for x in ','.join(context.args).split(',') if x.strip().isdigit()]
     if not numbers:
         try:
             sent = await update.message.reply_text("No valid numbers found.")
-            asyncio.create_task(delete_later(context, update.message.chat_id, sent.message_id))
         except Exception:
-            pass
+            return
+        await delete_message(sent)
+        await delete_message(update.message)
         return
     save_numbers(numbers)
     try:
         sent = await update.message.reply_text(f"✅ {len(numbers)} numbers saved.")
-        asyncio.create_task(delete_later(context, update.message.chat_id, sent.message_id))
     except Exception:
-        pass
+        return
+    await delete_message(sent)
+    await delete_message(update.message)
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_numbers()
     try:
         sent = await update.message.reply_text("🧹 All numbers cleared!")
-        asyncio.create_task(delete_later(context, update.message.chat_id, sent.message_id))
     except Exception:
-        pass
+        return
+    await delete_message(sent)
+    await delete_message(update.message)
 
 def format_numbers_result(results):
     lines = []
     for i, (num, status) in enumerate(results, 1):
         lines.append(f"{i}. {num} {status}")
-    return "\n".join(lines)
+    return lines
 
 def filter_restricted(results):
     return [(num, status) for num, status in results if "Restricted" in status]
@@ -152,26 +173,28 @@ async def checknum_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not numbers:
         try:
             sent = await update.message.reply_text("🚫 No numbers to check.")
-            asyncio.create_task(delete_later(context, update.message.chat_id, sent.message_id))
         except Exception:
-            pass
+            return
+        await delete_message(sent)
+        await delete_message(update.message)
         return
     try:
-        wait_msg = await update.message.reply_text("Checking numbers, please wait...")
+        wait_msg = await update.message.reply_text("Checking numbers, please wait... This may take a while for large lists.")
     except Exception:
         wait_msg = None
-    # Limit to 40 per check to avoid API ban
-    results = check_fragment_batch_playwright(numbers)
+    await delete_message(update.message)
+    # Check ALL numbers, with batching/protection
+    results = await asyncio.get_event_loop().run_in_executor(None, check_fragment_batch_selenium, numbers)
     context.user_data["last_check_results"] = results
-    res_txt = format_numbers_result(results)
-    keyboard = [
-        [InlineKeyboardButton("Show Restricted Only", callback_data="show_restricted")]
-    ]
+    res_lines = format_numbers_result(results)
+    parts = split_results(res_lines, chars_limit=3900)
+    keyboard = [[InlineKeyboardButton("Show Restricted Only", callback_data="show_restricted")]]
     try:
-        sent = await update.message.reply_text(res_txt, reply_markup=InlineKeyboardMarkup(keyboard))
-        if wait_msg:
-            asyncio.create_task(delete_later(context, update.message.chat_id, wait_msg.message_id, delay=0))
-        # Don't delete the result message!
+        for idx, part in enumerate(parts):
+            if idx == 0:
+                await wait_msg.edit_text(part, reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                await wait_msg.reply_text(part)
     except Exception as ex:
         logger.warning(f"checknum_command error: {ex}")
 
@@ -179,27 +202,30 @@ async def check1_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         try:
             sent = await update.message.reply_text("Usage: /check1 888xxxxxxx")
-            asyncio.create_task(delete_later(context, update.message.chat_id, sent.message_id))
         except Exception:
-            pass
+            return
+        await delete_message(sent)
+        await delete_message(update.message)
         return
     num = context.args[0].strip()
     if not num.isdigit():
         try:
             sent = await update.message.reply_text("Enter a valid number.")
-            asyncio.create_task(delete_later(context, update.message.chat_id, sent.message_id))
         except Exception:
-            pass
+            return
+        await delete_message(sent)
+        await delete_message(update.message)
         return
-    results = check_fragment_batch_playwright([num])
+    results = await asyncio.get_event_loop().run_in_executor(None, check_fragment_batch_selenium, [num])
     context.user_data["last_check_results"] = results
-    res_txt = format_numbers_result(results)
+    res_lines = format_numbers_result(results)
     try:
-        sent = await update.message.reply_text(res_txt)
-        # Don't delete result
+        msg = await update.message.reply_text('\n'.join(res_lines))
     except Exception:
-        pass
+        return
+    await delete_message(update.message)
 
+# --- Callback handler ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -208,16 +234,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await checknum_command(query, context)
         elif data == "clear":
             await clear_command(query, context)
+        elif data == "delete":
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
         elif data == "show_restricted":
             results = context.user_data.get("last_check_results", [])
             only_restricted = filter_restricted(results)
-            res_txt = format_numbers_result(only_restricted) if only_restricted else "No restricted numbers found."
-            await query.message.edit_text(res_txt)
+            res_lines = format_numbers_result(only_restricted) if only_restricted else ["No restricted numbers found."]
+            parts = split_results(res_lines, chars_limit=3900)
+            for idx, part in enumerate(parts):
+                if idx == 0:
+                    await query.message.edit_text(part)
+                else:
+                    await query.message.reply_text(part)
         elif data.startswith("accept_rules_"):
             await handle_rules_button(update, context)
         else:
             sent = await query.message.reply_text("Unknown action.")
-            asyncio.create_task(delete_later(context, query.message.chat_id, sent.message_id))
+            await delete_message(sent)
     except Exception as ex:
         logger.warning(f"button_callback error: {ex}")
 
